@@ -328,3 +328,56 @@ func errorStack(err error) []string {
 	}
 	return result
 }
+
+// ErrorStack returns a representation of the annotated error in the form of a slice of StackEntry.
+// It is the 'typed' equivalent of the ErrorStack method, which returns a string instead.
+// Is expected to be used alongside RecreateErr
+func ErrorEntryStack(err error) []StackEntry {
+	if err == nil {
+		return nil
+	}
+
+	// We want the first error first
+	var stack []StackEntry
+	for err != nil {
+		var entry StackEntry
+
+		// set file and line, if available. No change on err
+		if err, ok := err.(locationer); ok {
+			file, line := err.Location()
+			// Strip off the leading GOPATH/src path elements.
+			file = trimGoPath(file)
+			if file != "" {
+				entry.File = file
+				entry.Line = line
+			}
+		}
+
+		if cerr, ok := err.(wrapper); ok {
+			entry.Message = cerr.Message()
+			// If there is a cause for this error, and it is different to the cause
+			// of the underlying error, then output the error string in the stack trace.
+			var cause error
+			if err1, ok := err.(causer); ok {
+				cause = err1.Cause()
+			}
+			err = cerr.Underlying()
+			if cause != nil && !sameError(Cause(err), cause) {
+				entry.ErrMsg = cause.Error()
+			}
+		} else {
+			entry.ErrMsg = err.Error()
+			err = nil
+		}
+		stack = append(stack, entry)
+	}
+
+	// reverse the lines to get the original error, which was at the end of
+	// the list, back to the start.
+	// however the causer itself (last entry) is removed, is passed around elsewhere
+	result := make([]StackEntry, 0, len(stack)-1)
+	for i := len(stack) - 2; i >= 0; i-- {
+		result = append(result, stack[i])
+	}
+	return result
+}

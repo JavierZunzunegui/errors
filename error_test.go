@@ -6,11 +6,14 @@ package errors_test
 import (
 	"fmt"
 	"runtime"
+	"reflect"
+	"testing"
 
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
 
 	"github.com/juju/errors"
+
 )
 
 type errorsSuite struct{}
@@ -175,4 +178,100 @@ type testError struct {
 
 func (e testError) Error() string {
 	return e.message
+}
+
+func TestRecreateErr(t *testing.T) {
+	scenarios := []struct {
+		message   string
+		generator func() error
+	}{
+		{
+			message: "nil",
+			generator: func() error {
+				return nil
+			},
+		}, {
+			message: "raw error",
+			generator: func() error {
+				return fmt.Errorf("raw")
+			},
+		}, {
+			message: "single error stack",
+			generator: func() error {
+				return errors.New("first error")
+			},
+		}, {
+			message: "annotated error",
+			generator: func() error {
+				err := errors.New("first error")
+				return errors.Annotate(err, "annotation")
+			},
+		},
+		{
+			message: "wrapped error",
+			generator: func() error {
+				err := errors.New("first error")
+				return errors.Wrap(err, newError("detailed error"))
+			},
+		},
+		{
+			message: "annotated wrapped error",
+			generator: func() error {
+				err := errors.Errorf("first error")
+				err = errors.Wrap(err, fmt.Errorf("detailed error"))
+				return errors.Annotatef(err, "annotated")
+			},
+		}, {
+			message: "traced, and annotated",
+			generator: func() error {
+				err := errors.New("first error")
+				err = errors.Trace(err)
+				err = errors.Annotate(err, "some context")
+				err = errors.Trace(err)
+				err = errors.Annotate(err, "more context")
+				return errors.Trace(err)
+			},
+		}, {
+			message: "uncomparable, wrapped with a value error",
+			generator: func() error {
+				err := newNonComparableError("first error")
+				err = errors.Trace(err)
+				err = errors.Wrap(err, newError("value error"))
+				err = errors.Maskf(err, "masked")
+				err = errors.Annotate(err, "more context")
+				return errors.Trace(err)
+			},
+		},
+	}
+
+	for _, scenario := range scenarios {
+		err := scenario.generator()
+		recreateErr := errors.RecreateErr(errors.Cause(err), errors.ErrorEntryStack(err))
+
+		if err == nil && recreateErr == nil {
+			continue
+		}
+
+		if err.Error() != recreateErr.Error() {
+			t.Fatalf("mismatched Error() for: %s", scenario.message)
+		}
+		if errors.Cause(err) != errors.Cause(recreateErr) {
+			t.Fatalf("mismatched Cause(...) for: %s", scenario.message)
+		}
+
+		errE, ok1 := err.(*errors.Err)
+		recreateErrE, ok2 := recreateErr.(*errors.Err)
+
+		if !ok1 && !ok2 {
+			return
+		}
+
+		if !reflect.DeepEqual(errE.StackTrace(), recreateErrE.StackTrace()) {
+			t.Fatalf("mismatched StackTrace() for: %s", scenario.message)
+		}
+
+		if !reflect.DeepEqual(errE, recreateErrE) {
+			t.Fatalf("errors not deep-equal for: %s", scenario.message)
+		}
+	}
 }
